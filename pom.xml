@@ -21,11 +21,11 @@
     <parent>
         <groupId>io.ballerina</groupId>
         <artifactId>ballerina</artifactId>
-        <version>0.970.0-beta5</version>
+        <version>1</version>
     </parent>
 
     <groupId>org.ballerainax.awslambda</groupId>
-    <version>0.980.0</version>
+    <version>0.990.3-SNAPSHOT</version>
     <modelVersion>4.0.0</modelVersion>
     <artifactId>awslambda-extension</artifactId>
     <packaging>jar</packaging>

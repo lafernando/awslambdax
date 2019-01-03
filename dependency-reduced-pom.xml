@@ -3,14 +3,14 @@
   <parent>
     <artifactId>ballerina</artifactId>
     <groupId>io.ballerina</groupId>
-    <version>0.970.0-beta5</version>
+    <version>1</version>
     <relativePath>../pom.xml/pom.xml</relativePath>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <groupId>org.ballerainax.awslambda</groupId>
   <artifactId>awslambda-extension</artifactId>
   <name>Ballerina AWSLambda Extension</name>
-  <version>0.980.0</version>
+  <version>0.990.3-SNAPSHOT</version>
   <url>http://ballerinalang.org</url>
   <build>
     <resources>

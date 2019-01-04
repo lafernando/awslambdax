@@ -22,11 +22,17 @@ import org.ballerinalang.compiler.plugins.AbstractCompilerPlugin;
 import org.ballerinalang.compiler.plugins.SupportedAnnotationPackages;
 import org.ballerinalang.model.elements.PackageID;
 import org.ballerinalang.model.tree.AnnotationAttachmentNode;
-import org.ballerinalang.model.tree.ServiceNode;
+import org.ballerinalang.model.tree.FunctionNode;
+import org.ballerinalang.model.tree.PackageNode;
+import org.ballerinalang.model.types.TypeTags;
 import org.ballerinalang.util.diagnostic.Diagnostic;
 import org.ballerinalang.util.diagnostic.DiagnosticLog;
+import org.ballerinalang.util.exceptions.BallerinaException;
+import org.wso2.ballerinalang.compiler.semantics.model.symbols.BAnnotationSymbol;
 import org.wso2.ballerinalang.compiler.tree.BLangAnnotationAttachment;
-import org.wso2.ballerinalang.compiler.tree.expressions.BLangRecordLiteral;
+import org.wso2.ballerinalang.compiler.tree.BLangFunction;
+import org.wso2.ballerinalang.compiler.tree.types.BLangType;
+import org.wso2.ballerinalang.compiler.tree.types.BLangUnionTypeNode;
 
 import java.io.File;
 import java.io.IOException;
@@ -35,41 +41,103 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
- * Compiler plugin to generate greetings.
+ * Compiler plugin to process AWS lambda function annotations.
  */
-@SupportedAnnotationPackages(
-        value = "ballerinax.awslambda"
-)
+@SupportedAnnotationPackages(value = "ballerinax/awslambda:0.0.0")
 public class AWSLambdaPlugin extends AbstractCompilerPlugin {
-    private DiagnosticLog dlog;
 
+    //private static final String LAMBDA_ENTRYPOINT_FUNCTION = "__d47ff0e4_cb4f_40a7_acde_5daf8f50043c";
+    
+    private DiagnosticLog dlog;
 
     @Override
     public void init(DiagnosticLog diagnosticLog) {
-        // Initialize the logger.
         this.dlog = diagnosticLog;
     }
-
-    // Our annotation is attached to service<> objects.
+    
     @Override
-    public void process(ServiceNode serviceNode, List<AnnotationAttachmentNode> annotations) {
-        //Iterate through the annotation Attachment Nodes
-        for (AnnotationAttachmentNode attachmentNode : annotations) {
-            List<BLangRecordLiteral.BLangRecordKeyValue> keyValues =
-                    ((BLangRecordLiteral) ((BLangAnnotationAttachment) attachmentNode).expr).getKeyValuePairs();
-            //Iterate through the annotations
-            for (BLangRecordLiteral.BLangRecordKeyValue keyValue : keyValues) {
-                String annotationValue = keyValue.getValue().toString();
-                //Match annotation key and assign the value
-                String s = keyValue.getKey().toString();
-                if ("salutation".equals(s)) {
-                    AWSLambdaModel.getInstance().setGreeting(annotationValue);
-                }
+    public void process(PackageNode packageNode) {
+        List<BLangFunction> lambdaFunctions = new ArrayList<>();
+        for (FunctionNode fn : packageNode.getFunctions()) {
+            BLangFunction bfn = (BLangFunction) fn;
+            if (this.isLambdaFunction(bfn)) {
+                System.out.println("Lambda: " + fn);
+                lambdaFunctions.add(bfn);
             }
         }
+        if (!lambdaFunctions.isEmpty()) {
+            System.out.println("Generating code for lamdba...");
+        }
+    }
+    
+    private boolean isLambdaFunction(BLangFunction fn) {
+        List<BLangAnnotationAttachment> annotations = fn.annAttachments;
+        boolean hasLambdaAnnon = false;
+        for (AnnotationAttachmentNode attachmentNode : annotations) {
+            hasLambdaAnnon = this.hasLambaAnnotation(attachmentNode);
+            if (hasLambdaAnnon) {
+                break;
+            }
+        }
+        if (hasLambdaAnnon) {
+            BLangFunction bfn = (BLangFunction) fn;
+            if (!this.validateLambdaFunction(bfn)) {
+                dlog.logDiagnostic(Diagnostic.Kind.ERROR, fn.getPosition(), "Invalid function signature for an AWS lambda function: " + 
+                        bfn + ", it should be 'public function (awslambda:Context, json) returns json|error'");
+                return false;
+            } else {
+                return true;
+            }
+        } else {
+            return false;
+        }
+    }
+    
+    private boolean validateLambdaFunction(BLangFunction node) {
+        if (node.requiredParams.size() != 2 || node.defaultableParams.size() > 0 || node.restParam != null) {
+            return false;
+        }
+        BLangType type1 = (BLangType) node.requiredParams.get(0).getTypeNode();
+        BLangType type2 = (BLangType) node.requiredParams.get(1).getTypeNode();
+        if (!type1.type.tsymbol.name.value.equals("Context")) {
+            return false;
+        }
+        if (!type1.type.tsymbol.pkgID.orgName.value.equals("ballerinax") || 
+                !type1.type.tsymbol.pkgID.name.value.equals("awslambda")) {
+            return false;
+        }
+        if (type2.type.tag != TypeTags.JSON_TAG) {
+            return false;
+        }
+        BLangType retType = (BLangType) node.returnTypeNode;
+        if (!(retType instanceof BLangUnionTypeNode)) {
+            return false;
+        }
+        BLangUnionTypeNode unionType = (BLangUnionTypeNode) retType;
+        if (unionType.memberTypeNodes.size() != 2) {
+            return false;
+        }
+        Set<Integer> typeTags = new HashSet<>();
+        typeTags.add(unionType.memberTypeNodes.get(0).type.tag);
+        typeTags.add(unionType.memberTypeNodes.get(1).type.tag);
+        typeTags.remove(TypeTags.JSON_TAG);
+        typeTags.remove(TypeTags.ERROR_TAG);
+        if (!typeTags.isEmpty()) {
+            return false;
+        }        
+        return true;
+    }
+    
+    private boolean hasLambaAnnotation(AnnotationAttachmentNode attachmentNode) {
+        BAnnotationSymbol symbol = ((BLangAnnotationAttachment) attachmentNode).annotationSymbol;
+        return "ballerinax".equals(symbol.pkgID.orgName.value) && 
+                "awslambda".equals(symbol.pkgID.name.value) && "Function".equals(symbol.name.value);
     }
 
     @Override

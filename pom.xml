@@ -206,6 +206,9 @@
                                     <exclude>org.ballerinalang:ballerina-mime</exclude>
                                     <exclude>org.ballerinalang:ballerina-logging</exclude>
                                     <exclude>org.ballerinalang:ballerina-http</exclude>
+                                    <exclude>org.ballerinalang:ballerina-io</exclude>
+                                    <exclude>org.ballerinalang:ballerina-time</exclude>
+                                    <exclude>org.ballerinalang:ballerina-system</exclude>
                                     <exclude>org.bsc.maven:maven-processor-plugin</exclude>
                                 </excludes>
                             </artifactSet>

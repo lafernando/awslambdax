@@ -20,19 +20,44 @@ package org.ballerinax.awslambda;
 
 import org.ballerinalang.compiler.plugins.AbstractCompilerPlugin;
 import org.ballerinalang.compiler.plugins.SupportedAnnotationPackages;
+import org.ballerinalang.model.TreeBuilder;
+import org.ballerinalang.model.elements.Flag;
 import org.ballerinalang.model.elements.PackageID;
 import org.ballerinalang.model.tree.AnnotationAttachmentNode;
 import org.ballerinalang.model.tree.FunctionNode;
+import org.ballerinalang.model.tree.IdentifierNode;
 import org.ballerinalang.model.tree.PackageNode;
 import org.ballerinalang.model.types.TypeTags;
 import org.ballerinalang.util.diagnostic.Diagnostic;
 import org.ballerinalang.util.diagnostic.DiagnosticLog;
 import org.ballerinalang.util.exceptions.BallerinaException;
+import org.wso2.ballerinalang.compiler.desugar.ASTBuilderUtil;
+import org.wso2.ballerinalang.compiler.semantics.model.Scope;
+import org.wso2.ballerinalang.compiler.semantics.model.SymbolTable;
 import org.wso2.ballerinalang.compiler.semantics.model.symbols.BAnnotationSymbol;
+import org.wso2.ballerinalang.compiler.semantics.model.symbols.BInvokableSymbol;
+import org.wso2.ballerinalang.compiler.semantics.model.symbols.BPackageSymbol;
+import org.wso2.ballerinalang.compiler.semantics.model.symbols.BSymbol;
+import org.wso2.ballerinalang.compiler.semantics.model.symbols.Symbols;
+import org.wso2.ballerinalang.compiler.semantics.model.types.BInvokableType;
+import org.wso2.ballerinalang.compiler.semantics.model.types.BNilType;
 import org.wso2.ballerinalang.compiler.tree.BLangAnnotationAttachment;
 import org.wso2.ballerinalang.compiler.tree.BLangFunction;
+import org.wso2.ballerinalang.compiler.tree.BLangIdentifier;
+import org.wso2.ballerinalang.compiler.tree.BLangImportPackage;
+import org.wso2.ballerinalang.compiler.tree.BLangPackage;
+import org.wso2.ballerinalang.compiler.tree.expressions.BLangExpression;
+import org.wso2.ballerinalang.compiler.tree.expressions.BLangInvocation;
+import org.wso2.ballerinalang.compiler.tree.expressions.BLangLiteral;
+import org.wso2.ballerinalang.compiler.tree.expressions.BLangSimpleVarRef;
+import org.wso2.ballerinalang.compiler.tree.statements.BLangBlockStmt;
+import org.wso2.ballerinalang.compiler.tree.statements.BLangExpressionStmt;
 import org.wso2.ballerinalang.compiler.tree.types.BLangType;
 import org.wso2.ballerinalang.compiler.tree.types.BLangUnionTypeNode;
+import org.wso2.ballerinalang.compiler.util.CompilerContext;
+import org.wso2.ballerinalang.compiler.util.Name;
+import org.wso2.ballerinalang.compiler.util.diagnotic.DiagnosticPos;
+import org.wso2.ballerinalang.util.Flags;
 
 import java.io.File;
 import java.io.IOException;
@@ -42,6 +67,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -52,15 +78,21 @@ import java.util.Set;
 @SupportedAnnotationPackages(value = "ballerinax/awslambda:0.0.0")
 public class AWSLambdaPlugin extends AbstractCompilerPlugin {
 
-    //private static final String LAMBDA_ENTRYPOINT_FUNCTION = "__d47ff0e4_cb4f_40a7_acde_5daf8f50043c";
+    private static final String LAMBDA_ENTRYPOINT_FUNCTION = "__d47ff0e4_cb4f_40a7_acde_5daf8f50043c";
     
     private DiagnosticLog dlog;
-
+    
+    private SymbolTable symTable = null;
+    
     @Override
     public void init(DiagnosticLog diagnosticLog) {
         this.dlog = diagnosticLog;
     }
     
+    public void setCompilerContext(CompilerContext context) {
+        this.symTable = SymbolTable.getInstance(context);
+    }
+        
     @Override
     public void process(PackageNode packageNode) {
         List<BLangFunction> lambdaFunctions = new ArrayList<>();
@@ -71,9 +103,104 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
                 lambdaFunctions.add(bfn);
             }
         }
+        BLangPackage myPkg = (BLangPackage) packageNode;
         if (!lambdaFunctions.isEmpty()) {
+            BPackageSymbol lambdaPkgSymbol = this.extractLambdaPackageSymbol(myPkg);
+            if (lambdaPkgSymbol == null) {
+                // this symbol will always be there, since the import is needed to add the annotation
+                throw new BallerinaException("AWS Lambda package symbol cannot be found");
+            }
+            System.out.println("*** AAA: " + lambdaPkgSymbol);
             System.out.println("Generating code for lamdba...");
+            BLangFunction epFunc = this.createFunction(myPkg.pos, LAMBDA_ENTRYPOINT_FUNCTION, (BLangPackage) packageNode);
+            packageNode.addFunction(epFunc);
+            for (BLangFunction lambdaFunc : lambdaFunctions) {
+                this.addRegisterCall(lambdaPkgSymbol, lambdaFunc.body, lambdaFunc);
+            }
+            this.addProcessCall(lambdaPkgSymbol, epFunc.body);
         }
+    }
+    
+    private BPackageSymbol extractLambdaPackageSymbol(BLangPackage myPkg) {
+        for (BLangImportPackage pi : myPkg.imports) {
+            if ("ballerinax".equals(pi.orgName.value) && pi.pkgNameComps.size() == 1 && 
+                    "awslambda".equals(pi.pkgNameComps.get(0).value)) {
+                return pi.symbol;
+            }
+        }
+        return null;
+    }
+    
+    private void addRegisterCall(BPackageSymbol lamdaPkgSymbol, BLangBlockStmt blockStmt, BLangFunction func) {
+        List<BLangExpression> exprs = new ArrayList<>();
+        exprs.add(this.createStringLiteral(blockStmt.pos, func.name.value));
+        exprs.add(this.createVariableRef(blockStmt.pos, func.symbol));
+        BLangInvocation inv = this.createInvocationNode(lamdaPkgSymbol, "__register", exprs);
+        BLangExpressionStmt stmt = new BLangExpressionStmt(inv);
+        stmt.pos = blockStmt.pos;
+        blockStmt.addStatement(stmt);
+    }
+    
+    private BLangLiteral createStringLiteral(DiagnosticPos pos, String value) {
+        BLangLiteral stringLit = new BLangLiteral();
+        stringLit.pos = pos;
+        stringLit.value = value;
+        stringLit.type = symTable.stringType;
+        return stringLit;
+    }
+    
+    private BLangSimpleVarRef createVariableRef(DiagnosticPos pos, BSymbol varSymbol) {
+        final BLangSimpleVarRef varRef = (BLangSimpleVarRef) TreeBuilder.createSimpleVariableReferenceNode();
+        varRef.pos = pos;
+        varRef.variableName = ASTBuilderUtil.createIdentifier(pos, varSymbol.name.value);
+        varRef.symbol = varSymbol;
+        varRef.type = varSymbol.type;
+        return varRef;
+    }
+    
+    private void addProcessCall(BPackageSymbol lamdaPkgSymbol, BLangBlockStmt blockStmt) {
+        System.out.println("X: " + lamdaPkgSymbol + ":" + blockStmt);
+        BLangInvocation inv = this.createInvocationNode(lamdaPkgSymbol, "__process", new ArrayList<>(0));
+        BLangExpressionStmt stmt = new BLangExpressionStmt(inv);
+        stmt.pos = blockStmt.pos;
+        blockStmt.addStatement(stmt);
+    }
+    
+    private BLangInvocation createInvocationNode(BPackageSymbol pkgSymbol, String functionName, List<BLangExpression> args) {
+        BLangInvocation invocationNode = (BLangInvocation) TreeBuilder.createInvocationNode();
+        BLangIdentifier name = (BLangIdentifier) TreeBuilder.createIdentifierNode();
+        name.setLiteral(false);
+        name.setValue(functionName);
+        invocationNode.name = name;
+        invocationNode.pkgAlias = (BLangIdentifier) TreeBuilder.createIdentifierNode();
+        invocationNode.symbol = pkgSymbol.scope.lookup(new Name(functionName)).symbol;
+        if (invocationNode.symbol == null) {
+            return null;
+        }
+        invocationNode.type = new BNilType();
+        invocationNode.requiredArgs = args;
+        return invocationNode;
+    }
+    
+    private BLangFunction createFunction(DiagnosticPos pos, String name, BLangPackage packageNode) {
+        final BLangFunction bLangFunction = (BLangFunction) TreeBuilder.createFunctionNode();
+        final IdentifierNode funcName = ASTBuilderUtil.createIdentifier(pos, name);
+        bLangFunction.setName(funcName);
+        bLangFunction.flagSet = EnumSet.of(Flag.PUBLIC);
+        bLangFunction.pos = pos;
+        bLangFunction.type = new BInvokableType(new ArrayList<>(), new BNilType(), null);
+        bLangFunction.body = this.createBlockStmt(pos);
+        BInvokableSymbol functionSymbol = Symbols.createFunctionSymbol(Flags.asMask(bLangFunction.flagSet),
+                new Name(bLangFunction.name.value), packageNode.packageID, bLangFunction.type, packageNode.symbol, true);
+        functionSymbol.scope = new Scope(functionSymbol);
+        bLangFunction.symbol = functionSymbol;
+        return bLangFunction;
+    }
+    
+    private BLangBlockStmt createBlockStmt(DiagnosticPos pos) {
+        final BLangBlockStmt blockNode = (BLangBlockStmt) TreeBuilder.createBlockNode();
+        blockNode.pos = pos;
+        return blockNode;
     }
     
     private boolean isLambdaFunction(BLangFunction fn) {
@@ -94,7 +221,7 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
             } else {
                 return true;
             }
-        } else {
+        } else {        
             return false;
         }
     }

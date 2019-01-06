@@ -102,7 +102,7 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
     
     private DiagnosticLog dlog;
     
-    private SymbolTable symTable = null;
+    private SymbolTable symTable;
     
     @Override
     public void init(DiagnosticLog diagnosticLog) {
@@ -250,7 +250,8 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
         if (hasLambdaAnnon) {
             BLangFunction bfn = (BLangFunction) fn;
             if (!this.validateLambdaFunction(bfn)) {
-                dlog.logDiagnostic(Diagnostic.Kind.ERROR, fn.getPosition(), "Invalid function signature for an AWS lambda function: " + 
+                dlog.logDiagnostic(Diagnostic.Kind.ERROR, fn.getPosition(), 
+                        "Invalid function signature for an AWS lambda function: " + 
                         bfn + ", it should be 'public function (awslambda:Context, json) returns json|error'");
                 return false;
             } else {
@@ -310,6 +311,16 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
         } catch (IOException e) {
             throw new BallerinaException("Error generating AWS lambda zip file: " + e.getMessage(), e);
         }
+        String balxName = binaryPath.getFileName().toString().split("\\.")[0];
+        OUT.println("\n\tRun the following commands to deploy each Ballerina AWS Lambda function:");
+        OUT.println("\taws lambda create-function --function-name <FUNCTION_NAME> --zip-file fileb://"
+                + LAMBDA_OUTPUT_ZIP_FILENAME + " --handler " + balxName
+                + ".<FUNCTION_NAME> --runtime provided --role <LAMBDA_ROLE_ARN> --timeout 10 --memory-size 1024");
+        OUT.println("\taws lambda update-function-configuration --function-name <FUNCTION_NAME> "
+                + "--layers arn:aws:lambda:us-west-2:908363916138:layer:ballerina-0_990_3-runtime:11");
+        OUT.println("\n\tRun the following command to re-deploy an updated Ballerina AWS Lambda function:");
+        OUT.println("\taws lambda update-function-code --function-name <FUNCTION_NAME> --zip-file fileb://"
+                + LAMBDA_OUTPUT_ZIP_FILENAME);
     }
     
     private void generateZipFile(Path binaryPath) throws IOException {

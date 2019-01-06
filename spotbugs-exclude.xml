@@ -15,3 +15,15 @@
   ~ specific language governing permissions and limitations
   ~ under the License.
   -->
+
+<FindBugsFilter>
+	
+    <Match>
+        <Bug pattern="NP_NULL_ON_SOME_PATH_FROM_RETURN_VALUE"/>
+    </Match>
+
+    <Match>
+        <Bug pattern="UWF_FIELD_NOT_INITIALIZED_IN_CONSTRUCTOR"/>
+    </Match>
+
+</FindBugsFilter>

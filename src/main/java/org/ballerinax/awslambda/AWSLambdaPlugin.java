@@ -61,15 +61,19 @@ import org.wso2.ballerinalang.util.Flags;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+import java.io.PrintStream;
+import java.net.URI;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -78,7 +82,23 @@ import java.util.Set;
 @SupportedAnnotationPackages(value = "ballerinax/awslambda:0.0.0")
 public class AWSLambdaPlugin extends AbstractCompilerPlugin {
 
+    private static final String LAMBDA_OUTPUT_ZIP_FILENAME = "aws-ballerina-lambda-functions.zip";
+
+    private static final String AWS_LAMBDA_PACKAGE_NAME = "awslambda";
+
+    private static final String AWS_LAMBDA_PACKAGE_ORG = "ballerinax";
+
+    private static final String LAMBDA_PROCESS_FUNCTION_NAME = "__process";
+
+    private static final String LAMBDA_REG_FUNCTION_NAME = "__register";
+
+    private static final String MAIN_FUNC_NAME = "main";
+
     private static final String LAMBDA_ENTRYPOINT_FUNCTION = "__d47ff0e4_cb4f_40a7_acde_5daf8f50043c";
+    
+    private static final PrintStream OUT = System.out;
+    
+    private static List<String> generatedFuncs = new ArrayList<>();
     
     private DiagnosticLog dlog;
     
@@ -109,20 +129,38 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
                 // this symbol will always be there, since the import is needed to add the annotation
                 throw new BallerinaException("AWS Lambda package symbol cannot be found");
             }
-            BLangFunction epFunc = this.createFunction(myPkg.pos, LAMBDA_ENTRYPOINT_FUNCTION, (BLangPackage) packageNode);
+            BLangFunction epFunc = this.createFunction(myPkg.pos, LAMBDA_ENTRYPOINT_FUNCTION, myPkg);
             packageNode.addFunction(epFunc);
             for (BLangFunction lambdaFunc : lambdaFunctions) {
-                System.out.println("* Reg: " + lambdaFunc.name.value);
                 this.addRegisterCall(lambdaPkgSymbol, epFunc.body, lambdaFunc);
+                AWSLambdaPlugin.generatedFuncs.add(lambdaFunc.name.value);
             }
             this.addProcessCall(lambdaPkgSymbol, epFunc.body);
+            // check if a main function is already there, or else, add an empty main function
+            // this is to make sure a balx file will be generated from the source
+            this.checkAndAddMainFunction(myPkg);
+        }
+    }
+    
+    private void checkAndAddMainFunction(BLangPackage myPkg) {
+        Scope.ScopeEntry se = myPkg.symbol.scope.lookup(new Name(MAIN_FUNC_NAME));
+        boolean mainFuncFound = false;
+        while (se.symbol != null) {
+            if (se.symbol.getType().tag == TypeTags.INVOKABLE_TAG) {
+                mainFuncFound = true;
+                break;
+            }
+            se = se.next;
+        }
+        if (!mainFuncFound) {
+            myPkg.addFunction(this.createFunction(myPkg.pos, MAIN_FUNC_NAME, myPkg));
         }
     }
     
     private BPackageSymbol extractLambdaPackageSymbol(BLangPackage myPkg) {
         for (BLangImportPackage pi : myPkg.imports) {
-            if ("ballerinax".equals(pi.orgName.value) && pi.pkgNameComps.size() == 1 && 
-                    "awslambda".equals(pi.pkgNameComps.get(0).value)) {
+            if (AWS_LAMBDA_PACKAGE_ORG.equals(pi.orgName.value) && pi.pkgNameComps.size() == 1 && 
+                    AWS_LAMBDA_PACKAGE_NAME.equals(pi.pkgNameComps.get(0).value)) {
                 return pi.symbol;
             }
         }
@@ -133,7 +171,7 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
         List<BLangExpression> exprs = new ArrayList<>();
         exprs.add(this.createStringLiteral(blockStmt.pos, func.name.value));
         exprs.add(this.createVariableRef(blockStmt.pos, func.symbol));
-        BLangInvocation inv = this.createInvocationNode(lamdaPkgSymbol, "__register", exprs);
+        BLangInvocation inv = this.createInvocationNode(lamdaPkgSymbol, LAMBDA_REG_FUNCTION_NAME, exprs);
         BLangExpressionStmt stmt = new BLangExpressionStmt(inv);
         stmt.pos = blockStmt.pos;
         blockStmt.addStatement(stmt);
@@ -157,13 +195,15 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
     }
     
     private void addProcessCall(BPackageSymbol lamdaPkgSymbol, BLangBlockStmt blockStmt) {
-        BLangInvocation inv = this.createInvocationNode(lamdaPkgSymbol, "__process", new ArrayList<>(0));
+        BLangInvocation inv = this.createInvocationNode(lamdaPkgSymbol, 
+                LAMBDA_PROCESS_FUNCTION_NAME, new ArrayList<>(0));
         BLangExpressionStmt stmt = new BLangExpressionStmt(inv);
         stmt.pos = blockStmt.pos;
         blockStmt.addStatement(stmt);
     }
     
-    private BLangInvocation createInvocationNode(BPackageSymbol pkgSymbol, String functionName, List<BLangExpression> args) {
+    private BLangInvocation createInvocationNode(BPackageSymbol pkgSymbol, String functionName,
+            List<BLangExpression> args) {
         BLangInvocation invocationNode = (BLangInvocation) TreeBuilder.createInvocationNode();
         BLangIdentifier name = (BLangIdentifier) TreeBuilder.createIdentifierNode();
         name.setLiteral(false);
@@ -185,7 +225,8 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
         bLangFunction.type = new BInvokableType(new ArrayList<>(), new BNilType(), null);
         bLangFunction.body = this.createBlockStmt(pos);
         BInvokableSymbol functionSymbol = Symbols.createFunctionSymbol(Flags.asMask(bLangFunction.flagSet),
-                new Name(bLangFunction.name.value), packageNode.packageID, bLangFunction.type, packageNode.symbol, true);
+                new Name(bLangFunction.name.value), packageNode.packageID, 
+                bLangFunction.type, packageNode.symbol, true);
         functionSymbol.scope = new Scope(functionSymbol);
         bLangFunction.symbol = functionSymbol;
         return bLangFunction;
@@ -229,8 +270,8 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
         if (!type1.type.tsymbol.name.value.equals("Context")) {
             return false;
         }
-        if (!type1.type.tsymbol.pkgID.orgName.value.equals("ballerinax") || 
-                !type1.type.tsymbol.pkgID.name.value.equals("awslambda")) {
+        if (!type1.type.tsymbol.pkgID.orgName.value.equals(AWS_LAMBDA_PACKAGE_ORG) || 
+                !type1.type.tsymbol.pkgID.name.value.equals(AWS_LAMBDA_PACKAGE_NAME)) {
             return false;
         }
         if (type2.type.tag != TypeTags.JSON_TAG) {
@@ -257,42 +298,29 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
     
     private boolean hasLambaAnnotation(AnnotationAttachmentNode attachmentNode) {
         BAnnotationSymbol symbol = ((BLangAnnotationAttachment) attachmentNode).annotationSymbol;
-        return "ballerinax".equals(symbol.pkgID.orgName.value) && 
-                "awslambda".equals(symbol.pkgID.name.value) && "Function".equals(symbol.name.value);
+        return AWS_LAMBDA_PACKAGE_ORG.equals(symbol.pkgID.orgName.value) && 
+                AWS_LAMBDA_PACKAGE_NAME.equals(symbol.pkgID.name.value) && "Function".equals(symbol.name.value);
     }
 
     @Override
     public void codeGenerated(PackageID packageID, Path binaryPath) {
-        //extract file name.
-        String filePath = binaryPath.toAbsolutePath().toString().replace(".balx", ".txt");
-        String greeting = AWSLambdaModel.getInstance().getGreeting();
+        OUT.println("\t@awslambda:Function: " + String.join(", ", AWSLambdaPlugin.generatedFuncs));
         try {
-            writeToFile(greeting, filePath);
+            this.generateZipFile(binaryPath);
         } catch (IOException e) {
-            dlog.logDiagnostic(Diagnostic.Kind.ERROR, null, e.getMessage());
+            throw new BallerinaException("Error generating AWS lambda zip file: " + e.getMessage(), e);
+        }
+    }
+    
+    private void generateZipFile(Path binaryPath) throws IOException {
+        Map<String, String> env = new HashMap<>(); 
+        env.put("create", "true");
+        URI uri = URI.create("jar:file:" + binaryPath.toAbsolutePath().getParent().toUri().getPath() + File.separator + 
+                LAMBDA_OUTPUT_ZIP_FILENAME);
+        try (FileSystem zipfs = FileSystems.newFileSystem(uri, env)) {
+            Path pathInZipfile = zipfs.getPath("/" + binaryPath.getFileName());          
+            Files.copy(binaryPath, pathInZipfile, StandardCopyOption.REPLACE_EXISTING); 
         }
     }
 
-    /**
-     * Write content to a File. Create the required directories if they don't not exists.
-     *
-     * @param context        context of the file
-     * @param targetFilePath target file path
-     * @throws IOException If an error occurs when writing to a file
-     */
-    public void writeToFile(String context, String targetFilePath) throws IOException {
-        File newFile = new File(targetFilePath);
-        // append if file exists
-        if (newFile.exists()) {
-            Files.write(Paths.get(targetFilePath), context.getBytes(StandardCharsets.UTF_8),
-                    StandardOpenOption.APPEND);
-            return;
-        }
-        //create required directories
-        if (newFile.getParentFile().mkdirs()) {
-            Files.write(Paths.get(targetFilePath), context.getBytes(StandardCharsets.UTF_8));
-            return;
-        }
-        Files.write(Paths.get(targetFilePath), context.getBytes(StandardCharsets.UTF_8));
-    }
 }

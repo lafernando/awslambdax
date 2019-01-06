@@ -99,7 +99,6 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
         for (FunctionNode fn : packageNode.getFunctions()) {
             BLangFunction bfn = (BLangFunction) fn;
             if (this.isLambdaFunction(bfn)) {
-                System.out.println("Lambda: " + fn);
                 lambdaFunctions.add(bfn);
             }
         }
@@ -110,12 +109,11 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
                 // this symbol will always be there, since the import is needed to add the annotation
                 throw new BallerinaException("AWS Lambda package symbol cannot be found");
             }
-            System.out.println("*** AAA: " + lambdaPkgSymbol);
-            System.out.println("Generating code for lamdba...");
             BLangFunction epFunc = this.createFunction(myPkg.pos, LAMBDA_ENTRYPOINT_FUNCTION, (BLangPackage) packageNode);
             packageNode.addFunction(epFunc);
             for (BLangFunction lambdaFunc : lambdaFunctions) {
-                this.addRegisterCall(lambdaPkgSymbol, lambdaFunc.body, lambdaFunc);
+                System.out.println("* Reg: " + lambdaFunc.name.value);
+                this.addRegisterCall(lambdaPkgSymbol, epFunc.body, lambdaFunc);
             }
             this.addProcessCall(lambdaPkgSymbol, epFunc.body);
         }
@@ -159,7 +157,6 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
     }
     
     private void addProcessCall(BPackageSymbol lamdaPkgSymbol, BLangBlockStmt blockStmt) {
-        System.out.println("X: " + lamdaPkgSymbol + ":" + blockStmt);
         BLangInvocation inv = this.createInvocationNode(lamdaPkgSymbol, "__process", new ArrayList<>(0));
         BLangExpressionStmt stmt = new BLangExpressionStmt(inv);
         stmt.pos = blockStmt.pos;
@@ -174,9 +171,6 @@ public class AWSLambdaPlugin extends AbstractCompilerPlugin {
         invocationNode.name = name;
         invocationNode.pkgAlias = (BLangIdentifier) TreeBuilder.createIdentifierNode();
         invocationNode.symbol = pkgSymbol.scope.lookup(new Name(functionName)).symbol;
-        if (invocationNode.symbol == null) {
-            return null;
-        }
         invocationNode.type = new BNilType();
         invocationNode.requiredArgs = args;
         return invocationNode;

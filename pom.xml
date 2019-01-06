@@ -134,99 +134,21 @@
                 </excludes>
             </resource>
 
-            <!-- copy ballerina annotation sources to the jar -->
+            <!-- copy built-in ballerina sources to the jar -->
             <resource>
-                <directory>${ballerina.source.directory}</directory>
-                <targetPath>META-INF/</targetPath>
+                <directory>${generated.ballerina.source.directory}</directory>
+                <targetPath>META-INF/ballerina</targetPath>
             </resource>
         </resources>
-
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.7.0</version>
                 <configuration>
-                    <source>1.8</source>
-                    <target>1.8</target>
+                    <source>${wso2.maven.compiler.source}</source>
+                    <target>${wso2.maven.compiler.target}</target>
                 </configuration>
             </plugin>
-
-            <!-- For ballerina annotation processing -->
-            <plugin>
-                <groupId>org.bsc.maven</groupId>
-                <artifactId>maven-processor-plugin</artifactId>
-                <version>${mvn.processor.plugin.version}</version>
-                <configuration>
-                    <processors>
-                        <processor>org.ballerinalang.codegen.BallerinaAnnotationProcessor</processor>
-                    </processors>
-                    <options>
-                        <nativeEntityProviderPackage>org.ballerinalang.net.generated.providers
-                        </nativeEntityProviderPackage>
-                        <nativeEntityProviderClass>StandardNativeElementProvider</nativeEntityProviderClass>
-                    </options>
-                </configuration>
-                <executions>
-                    <execution>
-                        <id>process</id>
-                        <goals>
-                            <goal>process</goal>
-                        </goals>
-                        <phase>generate-sources</phase>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <artifactId>maven-shade-plugin</artifactId>
-                <version>2.4.3</version>
-                <executions>
-                    <execution>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>shade</goal>
-                        </goals>
-                        <configuration>
-                            <createDependencyReducedPom>true</createDependencyReducedPom>
-                            <minimizeJar>true</minimizeJar>
-                            <artifactSet>
-                                <excludes>
-                                    <exclude>org.slf4j:slf4j-api</exclude>
-                                    <exclude>org.slf4j:slf4j-jdk14</exclude>
-                                    <exclude>com.fasterxml.jackson.dataformat:jackson-dataformat-yaml</exclude>
-                                    <exclude>com.fasterxml.jackson.core:jackson-databind</exclude>
-                                    <exclude>com.fasterxml.jackson.core:jackson-annotations</exclude>
-                                    <exclude>com.fasterxml.jackson.core:jackson-core</exclude>
-                                    <exclude>commons-lang:commons-lang</exclude>
-                                    <exclude>org.yaml:snakeyaml</exclude>
-                                    <exclude>org.ballerinalang:ballerina-lang</exclude>
-                                    <exclude>org.ballerinalang:ballerina-launcher</exclude>
-                                    <exclude>org.ballerinalang:ballerina-builtin</exclude>
-                                    <exclude>org.ballerinalang:ballerina-core</exclude>
-                                    <exclude>org.ballerinalang:ballerina-mime</exclude>
-                                    <exclude>org.ballerinalang:ballerina-logging</exclude>
-                                    <exclude>org.ballerinalang:ballerina-http</exclude>
-                                    <exclude>org.ballerinalang:ballerina-io</exclude>
-                                    <exclude>org.ballerinalang:ballerina-time</exclude>
-                                    <exclude>org.ballerinalang:ballerina-system</exclude>
-                                    <exclude>org.bsc.maven:maven-processor-plugin</exclude>
-                                </excludes>
-                            </artifactSet>
-                            <filters>
-                                <filter>
-                                    <artifact>*:*</artifact>
-                                    <excludes>
-                                        <exclude>META-INF/*.SF</exclude>
-                                        <exclude>META-INF/*.DSA</exclude>
-                                        <exclude>META-INF/*.RSA</exclude>
-                                    </excludes>
-                                </filter>
-                            </filters>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
@@ -246,15 +168,10 @@
                                 </systemProperty>
                             </systemProperties>
                             <arguments>
-                                <!--is built in pkg loaded from source-->
                                 <argument>false</argument>
-                                <!--source project dir-->
                                 <argument>${basedir}/src/main/ballerina/ballerinax</argument>
-                                <!--balo destination-->
                                 <argument>${project.build.directory}/generated-balo/repo/ballerinax</argument>
-                                <!--ballerina home-->
                                 <argument>${project.build.directory}</argument>
-                                <!--not used-->
                                 <argument>${project.version}</argument>
                             </arguments>
                         </configuration>
@@ -265,6 +182,29 @@
                 </configuration>
             </plugin>
 
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <!-- Since jdbc balo is needed by tests, here it is copied to target/lib where other balos
+                    are copied to -->
+                    <execution>
+                        <id>copy-jdbc-balo</id>
+                        <phase>compile</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/lib/repo</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.build.directory}/generated-balo/repo/</directory>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-dependency-plugin</artifactId>
@@ -282,11 +222,9 @@
                     </execution>
                 </executions>
             </plugin>
-
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-assembly-plugin</artifactId>
-                <version>2.5.2</version>
                 <executions>
                     <execution>
                         <id>distribution</id>
@@ -300,8 +238,30 @@
                     </execution>
                 </executions>
             </plugin>
-
-
+            <!-- For ballerina annotation processing -->
+            <plugin>
+                <groupId>org.bsc.maven</groupId>
+                <artifactId>maven-processor-plugin</artifactId>
+                <version>${mvn.processor.plugin.version}</version>
+                <configuration>
+                    <processors>
+                        <processor>org.ballerinalang.codegen.BallerinaAnnotationProcessor</processor>
+                    </processors>
+                    <options>
+                        <nativeEntityProviderPackage>org.ballerinax.jdbc.generated.providers</nativeEntityProviderPackage>
+                        <nativeEntityProviderClass>StandardNativeElementProvider</nativeEntityProviderClass>
+                    </options>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>process</id>
+                        <goals>
+                            <goal>process</goal>
+                        </goals>
+                        <phase>generate-sources</phase>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 
